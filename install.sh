@@ -36,9 +36,9 @@ echo "Setting up integration script in $UATU_DIR..."
 mkdir -p "$UATU_DIR"
 cp uaterc.zsh "$UATU_DIR/uaterc.zsh"
 
-# In the installed script, we can fix the UATU_BIN to the absolute path just in case
-# but we do it portably.
-$SED_INPLACE "s|UATU_BIN=.*|UATU_BIN=\"$INSTALL_DIR/uatu\"|" "$UATU_DIR/uaterc.zsh"
+# Update path in the script to point to installed binary
+# We only want to replace the fallback UATU_BIN value, not all occurrences
+$SED_INPLACE 's|UATU_BIN="./uatu"|UATU_BIN="'"$INSTALL_DIR/uatu"'"|' "$UATU_DIR/uaterc.zsh"
 
 echo "Updating shell config ($ZSHRC)..."
 # Use ~ notation to be more readable

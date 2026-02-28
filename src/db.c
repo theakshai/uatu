@@ -218,11 +218,26 @@ int uatu_db_stop_session(UatuDB *ctx, int64_t session_id) {
     return 0;
 }
 
-int uatu_db_report(UatuDB *ctx) {
+// Helper to format duration smartly: "1h 30m", "45m 10s", or "5s"
+static void format_duration_smart(char *buf, size_t size, int64_t duration_ms) {
+    int total_seconds = (int)(duration_ms / 1000);
+    int h = total_seconds / 3600;
+    int m = (total_seconds % 3600) / 60;
+    int s = total_seconds % 60;
+
+    if (h > 0) {
+        snprintf(buf, size, "%dh %dm", h, m);
+    } else if (m > 0) {
+        snprintf(buf, size, "%dm %ds", m, s);
+    } else {
+        snprintf(buf, size, "%ds", s);
+    }
+}
+
+int uatu_db_report(UatuDB *ctx, int verbose) {
     sqlite3_stmt *stmt;
     
     // Report grouped by PROJECT first, then loose directories
-    // We use COALESCE(project, path) to treat non-project dirs as their own group
     const char *sql = 
         "SELECT COALESCE(project, path) as group_name, "
         "SUM(last_heartbeat - start_time) as duration, "
@@ -236,22 +251,33 @@ int uatu_db_report(UatuDB *ctx) {
         return 1;
     }
 
-    printf("%-60s %-15s %s\n", "Project / Directory", "Time Spent", "Sessions");
-    printf("%-60s %-15s %s\n", "-------------------", "----------", "--------");
+    if (verbose) {
+        printf("%-60s %-15s %s\n", "Project / Directory", "Time Spent", "Sessions");
+        printf("%-60s %-15s %s\n", "-------------------", "----------", "--------");
+    } else {
+        printf("%-60s %-15s %s\n", "Project / Directory", "Time", "Sessions");
+        printf("%-60s %-15s %s\n", "-------------------", "----", "--------");
+    }
 
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         const unsigned char *name = sqlite3_column_text(stmt, 0);
         int64_t duration_ms = sqlite3_column_int64(stmt, 1);
         int session_count = sqlite3_column_int(stmt, 2);
         
-        // Skip printing negative durations in report (just in case cleanup wasn't run)
         if (duration_ms < 0) continue;
 
-        int seconds = (int)(duration_ms / 1000) % 60;
-        int minutes = (int)((duration_ms / (1000 * 60)) % 60);
-        int hours = (int)((duration_ms / (1000 * 60 * 60)));
+        char time_buf[64];
+        if (verbose) {
+            int total_seconds = (int)(duration_ms / 1000);
+            int h = total_seconds / 3600;
+            int m = (total_seconds % 3600) / 60;
+            int s = total_seconds % 60;
+            snprintf(time_buf, sizeof(time_buf), "%02d:%02d:%02d", h, m, s);
+        } else {
+            format_duration_smart(time_buf, sizeof(time_buf), duration_ms);
+        }
 
-        printf("%-60s %02d:%02d:%02d    %d\n", name, hours, minutes, seconds, session_count);
+        printf("%-60s %-15s %d\n", name, time_buf, session_count);
     }
 
     sqlite3_finalize(stmt);

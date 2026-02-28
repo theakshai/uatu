@@ -14,8 +14,6 @@ fi
 
 # Check if binary exists
 if [[ ! -x "$UATU_BIN" ]]; then
-    # Silently fail or warn? Let's warn once.
-    echo "Warning: Uatu binary not found at $UATU_BIN. Tracking disabled."
     return
 fi
 
@@ -24,17 +22,16 @@ autoload -U add-zsh-hook
 
 # Function to start tracking a directory
 _uatu_chpwd() {
-    # Stop previous session if it exists (optional, but good for cleanliness)
+    # Stop previous session if it exists
     if [[ -n "$UATU_SESSION_ID" ]]; then
         "$UATU_BIN" stop "$UATU_SESSION_ID" > /dev/null 2>&1
     fi
     
     # Start new session
-    # We capture the ID. If it fails, ID is empty.
     local new_id
-    new_id=$("$UATU_BIN" start "$PWD")
+    new_id=$("$UATU_BIN" start "$PWD" 2>/dev/null)
     
-    if [[ -n "$new_id" ]]; then
+    if [[ "$new_id" =~ ^[0-9]+$ ]]; then
         typeset -g UATU_SESSION_ID="$new_id"
     else
         unset UATU_SESSION_ID
@@ -52,9 +49,6 @@ _uatu_heartbeat() {
         if [[ "$new_id" =~ ^[0-9]+$ ]]; then
             typeset -g UATU_SESSION_ID="$new_id"
         else
-            # If heartbeat failed (e.g. session deleted or DB error), we might want to unset
-            # OR we might want to keep the old ID and retry?
-            # If the session is invalid in DB, we should probably stop tracking it.
             unset UATU_SESSION_ID
         fi
     fi
@@ -81,5 +75,4 @@ add-zsh-hook preexec _uatu_heartbeat
 add-zsh-hook zshexit _uatu_stop_on_exit
 
 # Initial setup for the shell start
-# Manually trigger start for the current directory
 _uatu_chpwd
