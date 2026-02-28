@@ -1,7 +1,6 @@
 # Uatu: WakaTime for your Terminal
 
-Uatu is an invisible, privacy-first time tracker for your shell. 
-Just like WakaTime tracks your coding in VS Code, **Uatu tracks your work in the terminal.**
+I just wanted to track time on how much I spend in a project from start to completion.
 
 It automatically detects:
 - **Project Context:** Groups time by Git repositories (e.g. `~/work/backend` counts towards `backend`).
