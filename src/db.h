@@ -39,8 +39,9 @@ int uatu_db_stop_session(UatuDB *ctx, int64_t session_id);
 // Generate a report of time spent per directory.
 // Prints directly to stdout.
 // verbose: 1 for HH:MM:SS, 0 for human-readable (e.g. 1h 30m).
+// all_time: 0 for Today only, 1 for All history.
 // Returns 0 on success, non-zero on failure.
-int uatu_db_report(UatuDB *ctx, int verbose);
+int uatu_db_report(UatuDB *ctx, int verbose, int all_time);
 
 // Clean up invalid sessions (e.g. negative duration, zero duration).
 // Returns the number of deleted rows.

@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <limits.h>
 #include <sys/stat.h>
+#include <time.h>
 #include "db.h"
 
 void print_usage(const char *prog_name) {
@@ -13,7 +14,7 @@ void print_usage(const char *prog_name) {
     fprintf(stderr, "  start <path>     Start a tracking session for a directory\n");
     fprintf(stderr, "  heartbeat <id>   Update the heartbeat for a session\n");
     fprintf(stderr, "  stop <id>        Stop a tracking session\n");
-    fprintf(stderr, "  report [-v]      Show time spent per directory/project (-v for HH:MM:SS)\n");
+    fprintf(stderr, "  report [-v] [--all] Show time spent today (-v for HH:MM:SS, --all for history)\n");
     fprintf(stderr, "  cleanup          Remove short (<1s) or invalid sessions\n");
 }
 
@@ -95,10 +96,12 @@ int main(int argc, char *argv[]) {
 
     } else if (strcmp(command, "report") == 0) {
         int verbose = 0;
-        if (argc >= 3 && strcmp(argv[2], "-v") == 0) {
-            verbose = 1;
+        int all_time = 0;
+        for (int i = 2; i < argc; i++) {
+            if (strcmp(argv[i], "-v") == 0) verbose = 1;
+            if (strcmp(argv[i], "--all") == 0) all_time = 1;
         }
-        if (uatu_db_report(&db_ctx, verbose) != 0) {
+        if (uatu_db_report(&db_ctx, verbose, all_time) != 0) {
             return 1;
         }
 

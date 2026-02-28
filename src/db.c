@@ -234,37 +234,121 @@ static void format_duration_smart(char *buf, size_t size, int64_t duration_ms) {
     }
 }
 
-int uatu_db_report(UatuDB *ctx, int verbose) {
+// ANSI Color Codes
+#define COLOR_RESET  "\x1b[0m"
+#define COLOR_BOLD   "\x1b[1m"
+#define COLOR_GREEN  "\x1b[32m"
+#define COLOR_CYAN   "\x1b[36m"
+#define COLOR_GRAY   "\x1b[90m"
+
+// Helper to draw a progress bar: [##########          ]
+static void draw_progress_bar(char *buf, size_t size, double percentage, int width) {
+    int filled = (int)(percentage * width);
+    if (filled > width) filled = width;
+    
+    size_t pos = 0;
+    buf[pos++] = '[';
+    for (int i = 0; i < width; i++) {
+        if (pos < size - 2) {
+            buf[pos++] = (i < filled) ? '#' : ' ';
+        }
+    }
+    buf[pos++] = ']';
+    buf[pos] = '\0';
+}
+
+// Helper to calculate daily streak
+static int calculate_streak(UatuDB *ctx) {
+    sqlite3_stmt *stmt;
+    // This query finds consecutive days starting from today backwards, using local time
+    const char *sql = 
+        "WITH RECURSIVE dates(date) AS ("
+        "  SELECT date('now', 'localtime') "
+        "  UNION ALL "
+        "  SELECT date(date, '-1 day') FROM dates "
+        "  WHERE date(date, '-1 day') IN (SELECT DISTINCT date(start_time/1000, 'unixepoch', 'localtime') FROM sessions)"
+        ") SELECT COUNT(*) FROM dates WHERE date IN (SELECT DISTINCT date(start_time/1000, 'unixepoch', 'localtime') FROM sessions);";
+    
+    int streak = 0;
+    if (sqlite3_prepare_v2(ctx->db, sql, -1, &stmt, 0) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            streak = sqlite3_column_int(stmt, 0);
+        }
+        sqlite3_finalize(stmt);
+    }
+    return streak;
+}
+
+int uatu_db_report(UatuDB *ctx, int verbose, int all_time) {
     sqlite3_stmt *stmt;
     
-    // Report grouped by PROJECT first, then loose directories
-    const char *sql = 
+    // Calculate today's midnight in LOCAL ms
+    time_t now_t = time(NULL);
+    struct tm *lt = localtime(&now_t);
+    lt->tm_hour = 0;
+    lt->tm_min = 0;
+    lt->tm_sec = 0;
+    int64_t today_ms = (int64_t)mktime(lt) * 1000;
+
+    char where_clause[128] = "";
+    if (!all_time) {
+        snprintf(where_clause, sizeof(where_clause), "AND start_time >= %lld", today_ms);
+    }
+
+    // 1. Calculate TOTAL duration and project count for summary
+    int64_t total_duration_all = 0;
+    int project_count = 0;
+    char total_sql[512];
+    snprintf(total_sql, sizeof(total_sql), 
+             "SELECT SUM(last_heartbeat - start_time), COUNT(DISTINCT COALESCE(project, path)) "
+             "FROM sessions WHERE (last_heartbeat - start_time) > 0 %s;", 
+             where_clause);
+    
+    if (sqlite3_prepare_v2(ctx->db, total_sql, -1, &stmt, 0) == SQLITE_OK) {
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            total_duration_all = sqlite3_column_int64(stmt, 0);
+            project_count = sqlite3_column_int(stmt, 1);
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    if (total_duration_all == 0) {
+        printf("\n" COLOR_BOLD COLOR_CYAN "UATU DASHBOARD" COLOR_RESET " (%s)\n", all_time ? "All Time" : "Today");
+        printf(COLOR_GRAY "--------------------------------------------------------------------------------------------" COLOR_RESET "\n");
+        printf("No tracking data found for %s yet. Go explore some directories!\n", all_time ? "this history" : "today");
+        printf(COLOR_GRAY "--------------------------------------------------------------------------------------------" COLOR_RESET "\n");
+        return 0;
+    }
+
+    // 2. Main report query
+    char sql[512];
+    snprintf(sql, sizeof(sql), 
         "SELECT COALESCE(project, path) as group_name, "
         "SUM(last_heartbeat - start_time) as duration, "
         "COUNT(*) as sessions "
         "FROM sessions "
+        "WHERE (last_heartbeat - start_time) > 0 %s "
         "GROUP BY group_name "
-        "ORDER BY duration DESC;";
+        "ORDER BY duration DESC;", where_clause);
 
     if (sqlite3_prepare_v2(ctx->db, sql, -1, &stmt, 0) != SQLITE_OK) {
         fprintf(stderr, "Failed to prepare statement: %s\n", sqlite3_errmsg(ctx->db));
         return 1;
     }
 
-    if (verbose) {
-        printf("%-60s %-15s %s\n", "Project / Directory", "Time Spent", "Sessions");
-        printf("%-60s %-15s %s\n", "-------------------", "----------", "--------");
-    } else {
-        printf("%-60s %-15s %s\n", "Project / Directory", "Time", "Sessions");
-        printf("%-60s %-15s %s\n", "-------------------", "----", "--------");
-    }
+    printf("\n" COLOR_BOLD COLOR_CYAN "UATU DASHBOARD" COLOR_RESET " (%s)\n", all_time ? "All Time" : "Today");
+    printf(COLOR_GRAY "--------------------------------------------------------------------------------------------" COLOR_RESET "\n");
+    printf("%-50s %-12s %-15s %s\n", "Project / Directory", "Time", "Usage", "Sessions");
+    printf(COLOR_GRAY "--------------------------------------------------------------------------------------------" COLOR_RESET "\n");
 
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         const unsigned char *name = sqlite3_column_text(stmt, 0);
         int64_t duration_ms = sqlite3_column_int64(stmt, 1);
         int session_count = sqlite3_column_int(stmt, 2);
         
-        if (duration_ms < 0) continue;
+        double percentage = (double)duration_ms / total_duration_all;
+        char bar[32];
+        draw_progress_bar(bar, sizeof(bar), percentage, 10);
 
         char time_buf[64];
         if (verbose) {
@@ -277,8 +361,21 @@ int uatu_db_report(UatuDB *ctx, int verbose) {
             format_duration_smart(time_buf, sizeof(time_buf), duration_ms);
         }
 
-        printf("%-60s %-15s %d\n", name, time_buf, session_count);
+        // Highlight the top project in green
+        const char *color = (percentage > 0.4) ? COLOR_GREEN : "";
+        printf("%s%-50s " COLOR_RESET "%-12s %s %-6.0f%%   %d\n", 
+               color, name, time_buf, bar, percentage * 100, session_count);
     }
+
+    printf(COLOR_GRAY "--------------------------------------------------------------------------------------------" COLOR_RESET "\n");
+    
+    char total_time_buf[64];
+    format_duration_smart(total_time_buf, sizeof(total_time_buf), total_duration_all);
+    int streak = calculate_streak(ctx);
+    
+    printf(COLOR_BOLD "TOTAL ACTIVE: %-12s | PROJECTS: %-3d | STREAK: %d Days" COLOR_RESET "\n", 
+           total_time_buf, project_count, streak);
+    printf(COLOR_GRAY "--------------------------------------------------------------------------------------------" COLOR_RESET "\n\n");
 
     sqlite3_finalize(stmt);
     return 0;
